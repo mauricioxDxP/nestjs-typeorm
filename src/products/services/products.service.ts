@@ -1,60 +1,109 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 
 import { Product } from './../entities/product.entity';
-import { CreateProductDto, UpdateProductDto } from './../dtos/products.dtos';
+import { CreateProductDto, FilterProducsDto, UpdateProductDto } from './../dtos/products.dtos';
+import { Between, FindConditions, Repository } from 'typeorm';
+import { BrandsService } from './brands.service';
+import { Category } from '../entities/category.entity';
+import { Brand } from '../entities/brand.entity';
 
 @Injectable()
 export class ProductsService {
-  private counterId = 1;
-  private products: Product[] = [
-    {
-      id: 1,
-      name: 'Producto 1',
-      description: 'lorem lorem',
-      price: 10000,
-      stock: 300,
-      image: 'https://i.imgur.com/U4iGx1j.jpeg',
-    },
-  ];
+  constructor(
+    @InjectRepository(Product)
+    private readonly productsRepository: Repository<Product>,
+    @InjectRepository(Brand)
+    private readonly brandsRepository: Repository<Brand>,
+    @InjectRepository(Category)
+    private readonly categoriesRepository: Repository<Category>,
+  ) {}
 
-  findAll() {
-    return this.products;
+  findAll(params?: FilterProducsDto) {
+    if (params) {
+      const where: FindConditions<Product>={};
+      const { limit, offset } = params;
+      const { maxPrice, minPrice } = params;
+      if (minPrice && maxPrice) {
+        where.price = Between(minPrice, maxPrice);
+      }
+      return this.productsRepository.find({
+        relations: ['brand'],
+        where,
+        take: limit,
+        skip: offset,
+      });
+    }
+    return this.productsRepository.find({ relations: ['brand'] });
   }
 
-  findOne(id: number) {
-    const product = this.products.find((item) => item.id === id);
+  async findOne(id: number) {
+    const product = await this.productsRepository.findOne(id, {
+      relations: ['brand', 'categories'],
+    });
     if (!product) {
       throw new NotFoundException(`Product #${id} not found`);
     }
     return product;
   }
 
-  create(data: CreateProductDto) {
-    this.counterId = this.counterId + 1;
-    const newProduct = {
-      id: this.counterId,
-      ...data,
-    };
-    this.products.push(newProduct);
-    return newProduct;
+  async create(data: CreateProductDto) {
+    const newProduct = this.productsRepository.create(data);
+    if (data.brandId) {
+      const brand = await this.brandsRepository.findOne(data.brandId);
+      newProduct.brand = brand;
+    }
+    if (data.categoriesId) {
+      const categories = await this.categoriesRepository.findByIds(
+        data.categoriesId,
+      );
+      newProduct.categories = categories;
+    }
+    return this.productsRepository.save(newProduct);
   }
 
-  update(id: number, changes: UpdateProductDto) {
-    const product = this.findOne(id);
-    const index = this.products.findIndex((item) => item.id === id);
-    this.products[index] = {
-      ...product,
-      ...changes,
-    };
-    return this.products[index];
+  async update(id: number, changes: UpdateProductDto) {
+    const product = await this.productsRepository.findOne(id);
+    if (changes.brandId) {
+      const brand = await this.brandsRepository.findOne(changes.brandId);
+      product.brand = brand;
+    }
+    if (changes.categoriesId) {
+      const categories = await this.categoriesRepository.findByIds(
+        changes.categoriesId,
+      );
+      product.categories = categories;
+    }
+    this.productsRepository.merge(product, changes);
+    return this.productsRepository.save(product);
   }
-
   remove(id: number) {
-    const index = this.products.findIndex((item) => item.id === id);
-    if (index === -1) {
+    return this.productsRepository.delete(id);
+  }
+  async removeCategoryByProduct(id: number, categoryId: number) {
+    const product = await this.productsRepository.findOne(id, {
+      relations: ['categories'],
+    });
+    if (!product) {
       throw new NotFoundException(`Product #${id} not found`);
     }
-    this.products.splice(index, 1);
-    return true;
+    product.categories = product.categories.filter(
+      (categoryItem) => categoryItem.id !== categoryId);
+    console.log(product.categories);
+    return this.productsRepository.save(product);
+  }
+  async AddCategoryByProduct(id: number, categoryId: number) {
+    const product = await this.productsRepository.findOne(id, {
+      relations: ['categories'],
+    });
+    if (!product) {
+      throw new NotFoundException(`Product #${id} not found`);
+    }
+    const category = await this.categoriesRepository.findOne(categoryId);
+    if (!category) {
+      throw new NotFoundException(`Category #${categoryId} not found`);
+    }
+    product.categories.push(category);
+    return this.productsRepository.save(product);
   }
 }
